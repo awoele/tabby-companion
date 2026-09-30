@@ -24,7 +24,8 @@ export function neutralSince(x, y, previous, now) {
 export function tiltGesture(x, y, now, gate = { armed: true, since: null }) {
   if (Math.max(Math.abs(x), Math.abs(y)) < .25) return { armed: true, since: null, trigger: false };
   if (!gate.armed) return { ...gate, trigger: false };
-  if (Math.abs(x) < .9 || Math.abs(x) < Math.abs(y) + .2) return { armed: true, since: null, trigger: false };
+  // Downward tilt alone triggers the reaction; sideways steering never does.
+  if (y < .9 || y < Math.abs(x) + .2) return { armed: true, since: null, trigger: false };
   const since = gate.since ?? now;
   const trigger = now - since >= 260;
   return { armed: !trigger, since: trigger ? null : since, trigger };

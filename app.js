@@ -1,4 +1,4 @@
-import { clamp, deadZone, framePosition, frameBlend, neutralSince, tiltGesture, chooseAxis, relativeTilt, containRect } from './motion.js?v=4';
+import { clamp, deadZone, framePosition, frameBlend, neutralSince, tiltGesture, chooseAxis, relativeTilt, containRect } from './motion.js?v=5';
 
 const $ = id => document.getElementById(id);
 const canvas = $('catCanvas'), ctx = canvas.getContext('2d', { alpha: false });
