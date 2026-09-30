@@ -1,7 +1,8 @@
-import { clamp, deadZone, frameFor, chooseAxis, relativeTilt } from './motion.js';
+import { clamp, deadZone, framePosition, frameBlend, neutralSince, tiltGesture, chooseAxis, relativeTilt } from './motion.js?v=2';
 
 const $ = id => document.getElementById(id);
 const canvas = $('catCanvas'), ctx = canvas.getContext('2d', { alpha: false });
+const extensionCtx = $('screenExtension').getContext('2d', { alpha: false });
 const surface = $('touchSurface'), dialog = $('settings');
 const bridge = document.createElement('canvas');
 bridge.width = canvas.width; bridge.height = canvas.height;
@@ -22,6 +23,8 @@ const state = {
 let fadeStart = -1000, fadeDuration = 180, previousTime = performance.now();
 let lastDraw = '', lastVideoTime = -1, lastInput = 0, sensorBaseline = null, sensorSample = null;
 let sensorTimer, motionRequest = 0, sensorPending = false, pointer = null, keyTimer;
+let neutralAt = null, candidateAxis = null, candidateSince = 0, pendingClip = null;
+let gestureGate = { armed: true, since: null };
 $('reduceMotion').checked = state.reduced;
 
 function message(text) {
@@ -71,7 +74,9 @@ function getVideo(name) {
 async function playClip(name, { automatic = false } = {}) {
   if (!state.ready || state.paused || document.hidden) return;
   if (automatic && state.reduced) return showPoster();
+  if (pendingClip?.name === name && pendingClip.operation === state.operation) return;
   const operation = ++state.operation;
+  pendingClip = { name, operation };
   try {
     const video = getVideo(name);
     video.preload = 'auto';
@@ -92,7 +97,7 @@ async function playClip(name, { automatic = false } = {}) {
     if (error.name === 'NotAllowedError') {
       $('startButton').hidden = false; mood('等你轻轻点一下');
     } else message(error.message);
-  }
+  } finally { if (pendingClip?.operation === operation) pendingClip = null; }
 }
 function showPoster() {
   ++state.operation; stopVideos(); snapshot(); setMode('poster');
@@ -124,12 +129,20 @@ async function steer(x, y, source = 'touch') {
   if (Math.max(Math.abs(x), Math.abs(y)) > .05) noteInteraction();
   const axis = chooseAxis(x, y, state.axis);
   if (Math.max(Math.abs(x), Math.abs(y)) < .025) return;
-  if (state.mode === axis && state.axis === axis) return;
+  if (state.mode === axis && state.axis === axis) {
+    if (pendingClip) { ++state.operation; pendingClip = null; }
+    candidateAxis = null; return;
+  }
+  // A deliberate change must persist; diagonal sensor noise must not swap clips.
+  if (source === 'motion' && (state.mode === 'yaw' || state.mode === 'pitch')) {
+    if (candidateAxis !== axis) { candidateAxis = axis; candidateSince = performance.now(); return; }
+    if (performance.now() - candidateSince < 180) return;
+  }
   const operation = ++state.operation;
   try {
     await loadAtlas(axis);
     if (operation !== state.operation || state.paused || document.hidden) return;
-    stopVideos(); snapshot(); state.axis = axis; setMode(axis);
+    stopVideos(); snapshot(220); state.axis = axis; candidateAxis = null; neutralAt = null; setMode(axis);
     mood(axis === 'yaw' ? '你往哪儿，我就看哪儿' : '抬头，低头，跟着你');
   } catch { if (operation === state.operation) message('转头素材未加载成功。请再拖动一次，或先摸摸它。'); }
 }
@@ -137,9 +150,15 @@ function drawSource() {
   if (state.mode === 'yaw' || state.mode === 'pitch') {
     const a = atlasConfig[state.mode], image = atlasImages[state.mode];
     const value = state.mode === 'yaw' ? state.x : state.y;
-    const frame = frameFor(value, a.center, a.count);
-    state.frame = frame; canvas.dataset.frame = String(frame);
-    ctx.drawImage(image, frame % a.columns * 360, Math.floor(frame / a.columns) * 640, 360, 640, 0, 0, 720, 1280);
+    const position = framePosition(value, a.center, a.count);
+    const { first, second, mix } = frameBlend(position, a.count);
+    state.frame = position; canvas.dataset.frame = position.toFixed(3);
+    ctx.drawImage(image, first % a.columns * 360, Math.floor(first / a.columns) * 640, 360, 640, 0, 0, 720, 1280);
+    if (mix > .001) {
+      ctx.globalAlpha = mix;
+      ctx.drawImage(image, second % a.columns * 360, Math.floor(second / a.columns) * 640, 360, 640, 0, 0, 720, 1280);
+      ctx.globalAlpha = 1;
+    }
   } else if (videos[state.mode]?.readyState >= 2) {
     ctx.drawImage(videos[state.mode], 0, 0, 720, 1280);
   } else if (poster.complete && poster.naturalWidth) ctx.drawImage(poster, 0, 0, 720, 1280);
@@ -155,17 +174,23 @@ function render(now) {
   }
   const pose = state.mode === 'yaw' || state.mode === 'pitch';
   const video = videos[state.mode];
-  const frame = pose ? frameFor(state.mode === 'yaw' ? state.x : state.y, atlasConfig[state.mode].center, atlasConfig[state.mode].count) : -1;
+  const frame = pose ? framePosition(state.mode === 'yaw' ? state.x : state.y, atlasConfig[state.mode].center, atlasConfig[state.mode].count).toFixed(3) : -1;
   const key = state.mode + ':' + frame;
   const fading = !state.paused && now - fadeStart < fadeDuration;
   if (lastDraw !== key || fading || (!state.paused && video && video.currentTime !== lastVideoTime)) {
     drawSource();
     if (fading) { ctx.globalAlpha = 1 - clamp((now - fadeStart) / fadeDuration, 0, 1); ctx.drawImage(bridge, 0, 0); ctx.globalAlpha = 1; }
+    // Extend only background edge pixels into tall-screen letterboxing. No blur or image mask.
+    if (window.innerHeight / window.innerWidth >= 16 / 9) {
+      extensionCtx.drawImage(canvas, 0, 0, 720, 1, 0, 0, 720, 640);
+      extensionCtx.drawImage(canvas, 0, 1279, 720, 1, 0, 640, 720, 640);
+    }
     lastDraw = key; lastVideoTime = video?.currentTime ?? -1;
   }
   if (state.paused || !state.ready || dialog.open) return;
-  if (pose && !state.dragging && Math.abs(state.targetX) < .025 && Math.abs(state.targetY) < .025 && Math.abs(state.x) + Math.abs(state.y) < .04) returnIdle();
-  else if (pose && !state.dragging && now - lastInput > 1500) { state.targetX = state.targetY = 0; }
+  neutralAt = neutralSince(state.targetX, state.targetY, neutralAt, now);
+  if (pose && !state.dragging && neutralAt !== null && now - neutralAt > 700 && Math.abs(state.x) + Math.abs(state.y) < .04) returnIdle();
+  else if (pose && !state.dragging && state.source !== 'motion' && now - lastInput > 1500) { state.targetX = state.targetY = 0; }
   if (video && !video.paused && (video.ended || (state.mode === 'idle' && video.currentTime > 3.85))) {
     video.pause(); returnIdle();
   } else if (video?.ended) returnIdle();
@@ -232,6 +257,7 @@ reducedQuery.addEventListener('change', event => {
 
 function stopMotion() {
   ++motionRequest; sensorPending = false; state.motion = false; sensorBaseline = null;
+  gestureGate = { armed: true, since: null };
   clearTimeout(sensorTimer); window.removeEventListener('deviceorientation', onOrientation);
   $('motionButton').setAttribute('aria-pressed', 'false'); $('motionButton').querySelector('span').textContent = '开启倾斜';
   sourceLabel(); state.targetX = state.targetY = 0;
@@ -243,6 +269,14 @@ function onOrientation(event) {
   clearTimeout(sensorTimer);
   if (state.dragging) return;
   const value = relativeTilt(sensorSample, sensorBaseline, screen.orientation?.angle ?? window.orientation ?? 0);
+  if (!dialog.open && !state.paused && state.mode !== 'pet' && state.mode !== 'sleep') {
+    gestureGate = tiltGesture(value.x, value.y, performance.now(), gestureGate);
+    if (gestureGate.trigger) {
+      state.targetX = state.targetY = 0;
+      void playClip('pet'); return;
+    }
+    if (pendingClip?.name === 'pet') return;
+  }
   void steer(value.x, value.y, 'motion');
 }
 async function toggleMotion() {
@@ -267,10 +301,11 @@ async function toggleMotion() {
 }
 $('motionButton').addEventListener('click', toggleMotion);
 $('calibrateButton').addEventListener('click', () => {
+  gestureGate = { armed: true, since: null };
   if (state.motion) { sensorBaseline = null; state.targetX = state.targetY = 0; message('保持当前握姿，正在重新校准。'); }
   else message('先开启倾斜互动，再校准。');
 });
-screen.orientation?.addEventListener('change', () => { sensorBaseline = null; });
+screen.orientation?.addEventListener('change', () => { sensorBaseline = null; gestureGate = { armed: true, since: null }; });
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { ++state.operation; stopVideos(); stopMotion(); pointer = null; state.dragging = false; }
@@ -281,6 +316,8 @@ window.addEventListener('pagehide', () => { stopMotion(); stopVideos(); });
 async function init() {
   try {
     await poster.decode(); ctx.drawImage(poster, 0, 0, 720, 1280);
+    extensionCtx.drawImage(canvas, 0, 0, 720, 1, 0, 0, 720, 640);
+    extensionCtx.drawImage(canvas, 0, 1279, 720, 1, 0, 640, 720, 640);
     // Match the extended screen background to the actual video edges, not a guessed beige.
     for (const [name, y] of [['--scene-top', 2], ['--scene-bottom', 1277]]) {
       const pixels = ctx.getImageData(120, y, 480, 1).data;

@@ -6,10 +6,11 @@
   <meta name="theme-color" content="#b3aba4">
   <title>小虎斑</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./style.css?v=2">
 </head>
 <body>
   <main class="companion">
+    <canvas class="screen-extension" id="screenExtension" width="720" height="1280" aria-hidden="true"></canvas>
     <section class="scene" aria-label="小虎斑互动区">
       <div class="portrait" id="portrait">
         <img class="poster" src="./assets/video/poster.jpg" alt="正面坐着的银灰色虎斑猫" fetchpriority="high">
@@ -34,11 +35,11 @@
     <div class="play-actions"><button class="small-button" id="petButton" disabled>摸摸它</button><button class="small-button" id="sleepButton" disabled>打个盹</button><button class="small-button" id="pauseButton" aria-pressed="false">暂停</button></div>
     <label class="setting-row"><div><strong>自动打盹</strong><p>没有互动约 30 秒时打个盹。</p></div><input id="autoSleep" type="checkbox" checked></label>
     <label class="setting-row"><div><strong>减少动态效果</strong><p>暂停自动播放，保留主动互动。</p></div><input id="reduceMotion" type="checkbox"></label>
-    <details><summary>其他操作</summary><p>也可以按住小猫拖动，轻触摸摸它。键盘方向键控制视线，回车互动，Home 回正。</p><p>已有视频角度互动，不是可任意旋转的 3D 模型。</p></details>
+    <details><summary>其他操作</summary><p>轻轻左右倾斜控制视线，前后倾斜抬头低头。左右倾斜约 20° 并稍停，会播放歪头动作；先回正才能再次触发。</p><p>也可以按住小猫拖动，轻触播放歪头互动。键盘方向键控制视线，回车互动，Home 回正。</p><p>已有视频角度互动，不是可任意旋转的 3D 模型。</p></details>
     <p class="settings-foot"><span id="inputLabel">触摸互动</span> · 9:16</p>
   </dialog>
   <div id="mediaBank" aria-hidden="true"></div>
   <noscript>请启用 JavaScript 来与小猫互动。</noscript>
-  <script type="module" src="./app.js"></script>
+  <script type="module" src="./app.js?v=2"></script>
 </body>
 </html>
