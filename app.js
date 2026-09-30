@@ -1,4 +1,4 @@
-import { clamp, deadZone, framePosition, frameBlend, neutralSince, tiltGesture, chooseAxis, relativeTilt, containRect } from './motion.js?v=3';
+import { clamp, deadZone, framePosition, frameBlend, neutralSince, tiltGesture, chooseAxis, relativeTilt, containRect } from './motion.js?v=4';
 
 const $ = id => document.getElementById(id);
 const canvas = $('catCanvas'), ctx = canvas.getContext('2d', { alpha: false });
@@ -48,6 +48,7 @@ let lastDraw = '', lastVideoTime = -1, lastInput = 0, sensorBaseline = null, sen
 let sensorTimer, motionRequest = 0, sensorPending = false, pointer = null, keyTimer;
 let neutralAt = null, candidateAxis = null, candidateSince = 0, pendingClip = null;
 let gestureGate = { armed: true, since: null };
+let clipMotionAnchor = null;
 $('reduceMotion').checked = state.reduced;
 
 function message(text) {
@@ -100,6 +101,8 @@ async function playClip(name, { automatic = false } = {}) {
   if (pendingClip?.name === name && pendingClip.operation === state.operation) return;
   const operation = ++state.operation;
   pendingClip = { name, operation };
+  clipMotionAnchor = state.motion && sensorSample && sensorBaseline
+    ? relativeTilt(sensorSample, sensorBaseline, screen.orientation?.angle ?? window.orientation ?? 0) : null;
   try {
     const video = getVideo(name);
     video.preload = 'auto';
@@ -117,6 +120,8 @@ async function playClip(name, { automatic = false } = {}) {
     $('startButton').hidden = true;
   } catch (error) {
     if (operation !== state.operation) return;
+    // A denied/stalled clip must not leave motion trapped in a reaction mode.
+    showPoster();
     if (error.name === 'NotAllowedError') {
       $('startButton').hidden = false; mood('等你轻轻点一下');
     } else message(error.message);
@@ -145,7 +150,6 @@ async function loadAtlas(axis) {
 }
 async function steer(x, y, source = 'touch') {
   if (!state.ready || state.paused || document.hidden || dialog.open) return;
-  if ((state.mode === 'pet' || state.mode === 'sleep') && source !== 'touch') return;
   x = deadZone(clamp(x)); y = deadZone(clamp(y));
   state.targetX = x; state.targetY = y; state.source = source;
   lastInput = performance.now();
@@ -292,13 +296,21 @@ function onOrientation(event) {
   clearTimeout(sensorTimer);
   if (state.dragging) return;
   const value = relativeTilt(sensorSample, sensorBaseline, screen.orientation?.angle ?? window.orientation ?? 0);
+  if (state.paused || document.hidden || dialog.open) return;
+  const reacting = ['pet', 'sleep'].includes(state.mode) || ['pet', 'sleep'].includes(pendingClip?.name);
+  if (reacting) {
+    // Let a held gesture play, but give deliberate new motion priority even while loading.
+    if (clipMotionAnchor && Math.hypot(value.x - clipMotionAnchor.x, value.y - clipMotionAnchor.y) < .16) return;
+    ++state.operation; pendingClip = null; clipMotionAnchor = null;
+    gestureGate = { armed: false, since: null };
+    if (Math.max(Math.abs(value.x), Math.abs(value.y)) < .125) { returnIdle(); return; }
+  }
   if (!dialog.open && !state.paused && state.mode !== 'pet' && state.mode !== 'sleep') {
     gestureGate = tiltGesture(value.x, value.y, performance.now(), gestureGate);
     if (gestureGate.trigger) {
       state.targetX = state.targetY = 0;
       void playClip('pet'); return;
     }
-    if (pendingClip?.name === 'pet') return;
   }
   void steer(value.x, value.y, 'motion');
 }
