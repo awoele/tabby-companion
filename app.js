@@ -1,8 +1,31 @@
-import { clamp, deadZone, framePosition, frameBlend, neutralSince, tiltGesture, chooseAxis, relativeTilt } from './motion.js?v=2';
+import { clamp, deadZone, framePosition, frameBlend, neutralSince, tiltGesture, chooseAxis, relativeTilt, containRect } from './motion.js?v=3';
 
 const $ = id => document.getElementById(id);
 const canvas = $('catCanvas'), ctx = canvas.getContext('2d', { alpha: false });
 const extensionCtx = $('screenExtension').getContext('2d', { alpha: false });
+let extensionRect;
+function drawExtension() {
+  if (!extensionRect) return;
+  const { x, y, width, height } = extensionRect;
+  const w = extensionCtx.canvas.width, h = extensionCtx.canvas.height;
+  extensionCtx.drawImage(canvas, x, y, width, height);
+  if (x > 0) {
+    extensionCtx.drawImage(canvas, 0, 0, 1, 1280, 0, y, x + 1, height);
+    extensionCtx.drawImage(canvas, 719, 0, 1, 1280, x + width - 1, y, w - x - width + 1, height);
+  }
+  if (y > 0) {
+    extensionCtx.drawImage(canvas, 0, 0, 720, 1, x, 0, width, y + 1);
+    extensionCtx.drawImage(canvas, 0, 1279, 720, 1, x, y + height - 1, width, h - y - height + 1);
+  }
+}
+function resizeExtension() {
+  const stage = document.querySelector('.companion');
+  const w = Math.min(720, stage.clientWidth), h = Math.round(w * stage.clientHeight / stage.clientWidth);
+  extensionCtx.canvas.width = w; extensionCtx.canvas.height = h;
+  extensionRect = containRect(w, h);
+  drawExtension();
+}
+new ResizeObserver(resizeExtension).observe(document.querySelector('.companion'));
 const surface = $('touchSurface'), dialog = $('settings');
 const bridge = document.createElement('canvas');
 bridge.width = canvas.width; bridge.height = canvas.height;
@@ -153,14 +176,18 @@ function drawSource() {
     const position = framePosition(value, a.center, a.count);
     const { first, second, mix } = frameBlend(position, a.count);
     state.frame = position; canvas.dataset.frame = position.toFixed(3);
-    ctx.drawImage(image, first % a.columns * 360, Math.floor(first / a.columns) * 640, 360, 640, 0, 0, 720, 1280);
+    // Exclude encoded padding and neighboring atlas tiles, preserving the 9:16 aspect.
+    const inset = state.mode === 'pitch' ? 3 : .5, insetY = inset * 16 / 9;
+    const drawFrame = frame => ctx.drawImage(image, frame % a.columns * 360 + inset, Math.floor(frame / a.columns) * 640 + insetY, 360 - 2 * inset, 640 - 2 * insetY, 0, 0, 720, 1280);
+    drawFrame(first);
     if (mix > .001) {
       ctx.globalAlpha = mix;
-      ctx.drawImage(image, second % a.columns * 360, Math.floor(second / a.columns) * 640, 360, 640, 0, 0, 720, 1280);
+      drawFrame(second);
       ctx.globalAlpha = 1;
     }
   } else if (videos[state.mode]?.readyState >= 2) {
-    ctx.drawImage(videos[state.mode], 0, 0, 720, 1280);
+    const inset = state.mode === 'sleep' ? 6 : 0, insetY = inset * 16 / 9;
+    ctx.drawImage(videos[state.mode], inset, insetY, 720 - 2 * inset, 1280 - 2 * insetY, 0, 0, 720, 1280);
   } else if (poster.complete && poster.naturalWidth) ctx.drawImage(poster, 0, 0, 720, 1280);
 }
 function render(now) {
@@ -180,11 +207,7 @@ function render(now) {
   if (lastDraw !== key || fading || (!state.paused && video && video.currentTime !== lastVideoTime)) {
     drawSource();
     if (fading) { ctx.globalAlpha = 1 - clamp((now - fadeStart) / fadeDuration, 0, 1); ctx.drawImage(bridge, 0, 0); ctx.globalAlpha = 1; }
-    // Extend only background edge pixels into tall-screen letterboxing. No blur or image mask.
-    if (window.innerHeight / window.innerWidth >= 16 / 9) {
-      extensionCtx.drawImage(canvas, 0, 0, 720, 1, 0, 0, 720, 640);
-      extensionCtx.drawImage(canvas, 0, 1279, 720, 1, 0, 640, 720, 640);
-    }
+    drawExtension();
     lastDraw = key; lastVideoTime = video?.currentTime ?? -1;
   }
   if (state.paused || !state.ready || dialog.open) return;
@@ -316,15 +339,7 @@ window.addEventListener('pagehide', () => { stopMotion(); stopVideos(); });
 async function init() {
   try {
     await poster.decode(); ctx.drawImage(poster, 0, 0, 720, 1280);
-    extensionCtx.drawImage(canvas, 0, 0, 720, 1, 0, 0, 720, 640);
-    extensionCtx.drawImage(canvas, 0, 1279, 720, 1, 0, 640, 720, 640);
-    // Match the extended screen background to the actual video edges, not a guessed beige.
-    for (const [name, y] of [['--scene-top', 2], ['--scene-bottom', 1277]]) {
-      const pixels = ctx.getImageData(120, y, 480, 1).data;
-      const sums = [0, 0, 0];
-      for (let i = 0; i < pixels.length; i += 4) for (let c = 0; c < 3; c++) sums[c] += pixels[i + c];
-      document.documentElement.style.setProperty(name, 'rgb(' + sums.map(sum => Math.round(sum / 480)).join(',') + ')');
-    }
+    resizeExtension();
   } catch { ctx.fillStyle = '#b3aba4'; ctx.fillRect(0, 0, 720, 1280); }
   state.ready = true;
   for (const id of ['touchSurface', 'petButton', 'sleepButton']) $(id).disabled = false;

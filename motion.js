@@ -1,4 +1,8 @@
 export const clamp = (value, low = -1, high = 1) => Math.max(low, Math.min(high, value));
+export function containRect(w, h) {
+  const width = Math.min(w, h * 9 / 16), height = width * 16 / 9;
+  return { x: Math.max(0, (w - width) / 2), y: Math.max(0, (h - height) / 2), width, height };
+}
 export function deadZone(value, threshold = 0.10) {
   return Math.abs(value) <= threshold ? 0 : Math.sign(value) * (Math.abs(value) - threshold) / (1 - threshold);
 }
